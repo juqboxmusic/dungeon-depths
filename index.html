@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Dungeon Depths</title>
+  <meta name="description" content="A Dungeons & Dragons inspired tabletop adventure for the browser." />
+  <meta name="theme-color" content="#0b0a0d" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <link rel="stylesheet" href="css/style.css" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+
+  <!-- ============ HOME SCREEN ============ -->
+  <section id="screen-home" class="screen active">
+    <div class="home-inner">
+      <div class="home-emblem">⬢</div>
+      <h1 class="game-title">Dungeon<span>Depths</span></h1>
+      <p class="tagline">Seven rooms. Five monsters. One final boss.</p>
+      <div class="home-buttons">
+        <button id="btn-new-campaign" class="btn btn-primary btn-big">⚔ New Campaign</button>
+        <button id="btn-continue" class="btn btn-ghost btn-big" hidden>▶ Continue Adventure</button>
+        <div class="home-mp-row">
+          <button id="btn-mp-host" class="btn btn-ghost">🌐 Host Online</button>
+          <button id="btn-mp-join" class="btn btn-ghost">🔗 Join Game</button>
+        </div>
+      </div>
+      <p class="home-foot">d6 to move · d20 to fight · pass &amp; play</p>
+    </div>
+  </section>
+
+  <!-- ============ MULTIPLAYER SETUP + LOBBY ============ -->
+  <div id="mp-setup-overlay" class="modal-overlay" hidden>
+    <div class="modal">
+      <h3 id="mp-setup-title">Host Online Game</h3>
+      <input id="mp-name" class="text-input" type="text" maxlength="16" placeholder="Your name" />
+      <input id="mp-code" class="text-input mp-code-input" type="text" maxlength="5" placeholder="ROOM CODE" hidden />
+      <p id="mp-setup-error" class="validation"></p>
+      <button id="btn-mp-go" class="btn btn-primary btn-wide">Continue</button>
+      <button class="btn btn-ghost btn-wide" data-close="mp-setup-overlay">Cancel</button>
+    </div>
+  </div>
+
+  <section id="screen-lobby" class="screen">
+    <div class="lobby-inner">
+      <h2>🌐 Party Lobby</h2>
+      <div class="lobby-code-box">
+        <span class="lobby-code-label">Room code</span>
+        <span id="lobby-code" class="lobby-code">·····</span>
+        <span class="lobby-code-hint">friends join with this code</span>
+      </div>
+      <p id="lobby-status" class="lobby-status"></p>
+      <div id="lobby-players" class="lobby-players"></div>
+      <div class="lobby-buttons">
+        <button id="btn-lobby-pick" class="btn btn-primary btn-big">⚔ Choose Your Hero</button>
+        <button id="btn-lobby-start" class="btn btn-primary btn-big" hidden>⚑ Begin the Descent</button>
+        <button id="btn-lobby-leave" class="btn btn-ghost">Leave</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CAMPAIGN DESIGNER (wizard) ============ -->
+  <section id="screen-designer" class="screen">
+    <header class="designer-head">
+      <button id="btn-designer-back" class="btn btn-ghost btn-small">✕</button>
+      <div class="wizard-head-mid">
+        <h2 id="wizard-step-title">Design Your Campaign</h2>
+        <p id="wizard-step-flavor" class="wizard-flavor"></p>
+      </div>
+      <div id="wizard-dots" class="wizard-dots"></div>
+    </header>
+    <div id="wizard-body" class="wizard-body"></div>
+    <footer class="wizard-footer">
+      <button id="btn-wiz-back" class="btn btn-ghost">‹ Back</button>
+      <span id="wizard-validation" class="validation"></span>
+      <button id="btn-wiz-next" class="btn btn-primary">Next ›</button>
+    </footer>
+
+    <!-- Advanced move editor -->
+    <div id="move-editor-overlay" class="modal-overlay" hidden>
+      <div class="modal move-editor-modal">
+        <h3 id="move-editor-title">Edit Move</h3>
+        <div id="move-editor-body"></div>
+        <p id="move-editor-desc" class="move-editor-desc"></p>
+        <button id="btn-move-editor-done" class="btn btn-primary btn-wide" data-close="move-editor-overlay">Done</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ GAME SCREEN ============ -->
+  <section id="screen-game" class="screen">
+    <canvas id="game-canvas"></canvas>
+
+    <!-- Top HUD -->
+    <div class="hud hud-top">
+      <button id="btn-menu" class="btn btn-ghost btn-small">☰</button>
+      <div class="room-title">
+        <span id="hud-room-name">Lobby</span>
+        <span id="hud-cleared" class="cleared-pips"></span>
+      </div>
+      <span id="hud-lives" class="hud-lives" title="Party lives"></span>
+      <button id="btn-map" class="btn btn-ghost btn-small">▦ Map</button>
+    </div>
+
+    <!-- Monster banner -->
+    <div id="monster-banner" class="monster-banner" hidden>
+      <span id="monster-name" class="monster-name">Monster</span>
+      <div class="hp-track"><div id="monster-hp-fill" class="hp-fill monster"></div></div>
+      <span id="monster-hp-text" class="hp-text">20/20</span>
+    </div>
+
+    <!-- Turn banner -->
+    <div id="turn-banner" class="turn-banner"></div>
+
+    <!-- Floating combat text anchor -->
+    <div id="float-layer"></div>
+
+    <!-- Bottom HUD -->
+    <div class="hud hud-bottom">
+      <div id="party-strip" class="party-strip"></div>
+      <div id="action-log" class="action-log"></div>
+      <div id="action-bar" class="action-bar"></div>
+    </div>
+
+    <!-- Dice overlay -->
+    <div id="dice-overlay" class="dice-overlay" hidden>
+      <div id="dice-shape" class="dice-shape d20"><span id="dice-value">?</span></div>
+      <div id="dice-caption" class="dice-caption"></div>
+    </div>
+
+    <!-- Minimap overlay -->
+    <div id="map-overlay" class="modal-overlay" hidden>
+      <div class="modal">
+        <h3>Dungeon Map</h3>
+        <div id="minimap" class="minimap"></div>
+        <button class="btn btn-primary" data-close="map-overlay">Close</button>
+      </div>
+    </div>
+
+    <!-- Event / plot twist modal -->
+    <div id="event-overlay" class="modal-overlay" hidden>
+      <div class="modal event-modal">
+        <div id="event-icon" class="event-icon">☄</div>
+        <h3 id="event-title">Plot Twist!</h3>
+        <p id="event-text"></p>
+        <button class="btn btn-primary" data-close="event-overlay">Continue</button>
+      </div>
+    </div>
+
+    <!-- Waygate teleport picker -->
+    <div id="teleport-overlay" class="modal-overlay" hidden>
+      <div class="modal">
+        <h3>🌀 Waygate</h3>
+        <p>Choose a destination.</p>
+        <div id="teleport-map" class="minimap"></div>
+        <button class="btn btn-ghost btn-wide" data-close="teleport-overlay">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Magic spell menu -->
+    <div id="magic-overlay" class="modal-overlay" hidden>
+      <div class="modal magic-modal">
+        <h3>✦ Choose a Spell</h3>
+        <div id="magic-list" class="magic-list"></div>
+        <button class="btn btn-ghost btn-wide" data-close="magic-overlay">Cancel</button>
+      </div>
+    </div>
+
+    <!-- Pause menu -->
+    <div id="menu-overlay" class="modal-overlay" hidden>
+      <div class="modal">
+        <h3 id="menu-campaign-name">Campaign</h3>
+        <button class="btn btn-ghost btn-wide" data-close="menu-overlay">Resume</button>
+        <button id="btn-quit" class="btn btn-danger btn-wide">Abandon Campaign</button>
+      </div>
+    </div>
+
+    <!-- End screens -->
+    <div id="end-overlay" class="modal-overlay" hidden>
+      <div class="modal end-modal">
+        <div id="end-icon" class="event-icon">🏆</div>
+        <h3 id="end-title">Victory!</h3>
+        <p id="end-text"></p>
+        <button id="btn-end-home" class="btn btn-primary btn-wide">Return to Title</button>
+      </div>
+    </div>
+  </section>
+
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
