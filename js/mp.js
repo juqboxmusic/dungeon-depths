@@ -5,7 +5,8 @@
 //  send intents when it is their hero's turn.
 // ============================================================
 import { Net } from './net.js';
-import { HEROES } from './data.js';
+import { HEROES, MONSTERS, BOSSES } from './data.js';
+import { loadGLTF, loadImage, propFilesFor, floorTextureFilesFor, sideCharacterFiles } from './tokens.js';
 import { animateRoll } from './dice.js';
 
 const $ = (id) => document.getElementById(id);
@@ -96,8 +97,60 @@ export class MP {
       t: 'lobby',
       players: this.players.map(({ name, heroId, ready, connected }) => ({ name, heroId, ready, connected })),
       phase: this.phase,
+      preload: this._preloadManifest(),
     });
     this.renderLobby();
+  }
+
+  /** Everything a client will need to render this campaign. */
+  _preloadManifest() {
+    const c = this.pendingCampaign;
+    if (!c) return null;
+    const models = new Set();
+    for (const p of this.players) {
+      const h = p.heroId && HEROES.find((x) => x.id === p.heroId);
+      if (h) models.add(h.model);
+    }
+    const themes = new Set([c.themeId]);
+    for (const id of c.monsterIds || []) {
+      const m = MONSTERS.find((x) => x.id === id);
+      if (m) { models.add(m.model); themes.add(c.monsterConfig?.[id]?.roomTheme || m.roomTheme); }
+    }
+    const b = BOSSES.find((x) => x.id === c.bossId);
+    if (b) { models.add(b.model); themes.add(c.monsterConfig?.[b.id]?.roomTheme || b.roomTheme); }
+    return { models: [...models].filter(Boolean), themes: [...themes].filter(Boolean) };
+  }
+
+  /** Warm the model/texture caches during the lobby wait, so the game
+   *  starts instantly instead of downloading mid-fight. */
+  async _preload(manifest) {
+    if (!manifest) return;
+    this._preloaded = this._preloaded || new Set();
+    const jobs = [];
+    for (const m of manifest.models || []) {
+      if (this._preloaded.has(m)) continue;
+      this._preloaded.add(m);
+      jobs.push(() => loadGLTF(m).catch(() => {}));
+    }
+    if (!this._preloaded.has('side-chars')) {
+      this._preloaded.add('side-chars');
+      jobs.push(async () => {
+        const files = await sideCharacterFiles().catch(() => []);
+        for (const f of files) await loadGLTF(`models/side-characters/${f}`).catch(() => {});
+      });
+    }
+    for (const t of manifest.themes || []) {
+      const key = 'theme:' + t;
+      if (this._preloaded.has(key)) continue;
+      this._preloaded.add(key);
+      jobs.push(async () => {
+        const props = await propFilesFor(t).catch(() => []);
+        for (const f of props) await loadGLTF(`models/props/${t}/${f}`).catch(() => {});
+        const texs = await floorTextureFilesFor(t).catch(() => []);
+        for (const f of texs) await loadImage(`floor-textures/${t}/${f}`).catch(() => {});
+      });
+    }
+    for (const j of jobs) await j(); // sequential — don't choke the connection
   }
 
   /** Host finished the designer (their own hero is in the campaign). */
@@ -109,6 +162,7 @@ export class MP {
     me.ready = true;
     this.phase = 'lobby';
     this._syncLobby();
+    this._preload(this._preloadManifest()); // host warms its caches too
   }
 
   startGame() {
@@ -124,7 +178,18 @@ export class MP {
     this.onStart?.(campaign, true);
   }
 
-  broadcastState(snap) { if (this.isHost) this.net.broadcast({ t: 'state', snap }); }
+  /** Snapshots come thick and fast during combat — coalesce them so only
+   *  the freshest state goes over the wire (~12/sec max). */
+  broadcastState(snap) {
+    if (!this.isHost) return;
+    this._pendingSnap = snap;
+    if (this._snapTimer) return;
+    this._snapTimer = setTimeout(() => {
+      this._snapTimer = null;
+      if (this._pendingSnap) this.net.broadcast({ t: 'state', snap: this._pendingSnap });
+      this._pendingSnap = null;
+    }, 80);
+  }
   broadcastEv(ev) { if (this.isHost) this.net.broadcast({ t: 'ev', ...ev }); }
 
   // ------------------------------------------------------ guest
@@ -151,6 +216,7 @@ export class MP {
         if (this.phase !== 'playing') this.phase = msg.phase;
         this.designer?.updateLocks?.(this.takenHeroIds());
         this.renderLobby();
+        if (msg.preload) this._preload(msg.preload); // download models while we wait
         break;
       case 'pickRejected':
         this.ui.showEvent({ icon: '🔒', title: 'Hero taken', text: 'Another player claimed that hero first — choose a different one.' });

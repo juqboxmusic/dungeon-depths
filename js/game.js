@@ -397,6 +397,13 @@ export class Game {
     // nothing left to do (move spent, no attack/spell/exit)? pass the turn
     // (host-only online — guests never drive the game clock)
     if (this.mp?.active && !this.mp.isHost) return;
+
+    // replay a remote press that arrived while we were animating
+    if (this.mp?.active && this.mp.isHost && !this.busy && this._queuedIntent) {
+      const q = this._queuedIntent;
+      this._queuedIntent = null;
+      setTimeout(() => this.handleIntent(q.msg, q.senderName), 30);
+    }
     const hasOption = actions.some((a) => a.id !== 'end' && !a.disabled);
     if (this.turn.rolledMove && !hasOption && !this._autoEnding && !this.busy) {
       this._autoEnding = true;
@@ -478,6 +485,9 @@ export class Game {
   /** Host: execute a validated action sent by a remote player. */
   handleIntent(msg, senderName) {
     if (!this.turn || this.over) return;
+    // mid-animation? queue it (last press wins) instead of swallowing it —
+    // a dropped tap feels like lag to the player who sent it
+    if (this.busy) { this._queuedIntent = { msg, senderName }; return; }
     const h = this.activeHero;
     if (this.ownerOf(h.id) !== senderName) return; // not their hero's turn
     this._remoteAct = true;
