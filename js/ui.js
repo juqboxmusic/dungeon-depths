@@ -79,6 +79,12 @@ export class UI {
     if (this._heroes) this.refreshParty(this._heroes);
   }
 
+  showRoomLoading(name) {
+    $('room-loading-name').textContent = `Entering ${name}…`;
+    $('room-loading').hidden = false;
+  }
+  hideRoomLoading() { $('room-loading').hidden = true; }
+
   /** Multiplayer: another player's hero is acting. */
   setWaiting(text) {
     $('action-bar').innerHTML = `<button class="btn btn-ghost action-btn waiting" disabled>${text}</button>`;

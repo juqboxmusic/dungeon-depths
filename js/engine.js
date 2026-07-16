@@ -852,24 +852,31 @@ export class Engine {
 
   // ---------------------------------------------------------- floor texture
   async _floorTexture(room, spec) {
-    // 1) full room art: maps/<themeId>/room-<id>.jpg or .png
-    for (const ext of ['jpg', 'png']) {
-      const url = `maps/${spec.id}/room-${room.id}.${ext}`;
-      const tex = await new Promise((res) => {
-        new THREE.TextureLoader().load(url, (t) => res(t), undefined, () => res(null));
-      });
-      if (tex) { tex.colorSpace = THREE.SRGBColorSpace; return tex; }
+    // floors are expensive (network probes + 1024² canvas work) and
+    // deterministic per room+theme+accent — build once, reuse forever
+    this._floorCache = this._floorCache || new Map();
+    const key = `${spec.id}|${spec.accent}|room-${room.id}`;
+    if (!this._floorCache.has(key)) {
+      this._floorCache.set(key, (async () => {
+        // 1) full room art: maps/<themeId>/room-<id>.jpg or .png (parallel probe)
+        const probe = (ext) => new Promise((res) => {
+          new THREE.TextureLoader().load(`maps/${spec.id}/room-${room.id}.${ext}`, (t) => res(t), undefined, () => res(null));
+        });
+        const [jpg, png] = await Promise.all([probe('jpg'), probe('png')]);
+        const art = jpg || png;
+        if (art) { art.colorSpace = THREE.SRGBColorSpace; return art; }
+        // 2) user-supplied tileable texture, with theme markings on top
+        const texFiles = (await floorTextureFilesFor(spec.id).catch(() => [])).slice().sort();
+        if (texFiles.length) {
+          const file = texFiles[room.id % texFiles.length]; // stable per room
+          const img = await loadImage(`floor-textures/${spec.id}/${file}`).catch(() => null);
+          if (img) return this._proceduralFloor(spec, img);
+        }
+        // 3) fully procedural
+        return this._proceduralFloor(spec);
+      })());
     }
-    // 2) user-supplied tileable texture: floor-textures/<themeId>/*.jpg|png
-    //    — tiled as the base, with the theme's markings drawn on top
-    const texFiles = (await floorTextureFilesFor(spec.id).catch(() => [])).slice().sort();
-    if (texFiles.length) {
-      const file = texFiles[room.id % texFiles.length]; // stable per room
-      const img = await loadImage(`floor-textures/${spec.id}/${file}`).catch(() => null);
-      if (img) return this._proceduralFloor(spec, img);
-    }
-    // 3) fully procedural
-    return this._proceduralFloor(spec);
+    return this._floorCache.get(key);
   }
 
   _proceduralFloor(spec, baseImg = null) {

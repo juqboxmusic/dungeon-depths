@@ -460,6 +460,22 @@ h1, h2, h3, .game-title, .monster-name, .turn-banner { font-family: Georgia, "Ti
 }
 .action-btn.has-move-color:not(:disabled) { text-shadow: 0 0 12px var(--move-color); }
 
+/* ---------------- room loading veil ---------------- */
+.room-loading {
+  position: fixed; inset: 0; z-index: 15;
+  display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at 50% 45%, rgba(20,16,26,0.92), rgba(6,5,9,0.97));
+}
+.room-loading[hidden] { display: none; }
+.rl-inner { display: flex; flex-direction: column; align-items: center; gap: 14px; }
+.rl-spin {
+  font-size: 46px; color: var(--gold);
+  animation: rl-turn 1.6s linear infinite;
+  text-shadow: 0 0 30px rgba(212,160,23,0.6);
+}
+@keyframes rl-turn { to { transform: rotate(360deg); } }
+#room-loading-name { font-family: Georgia, serif; font-size: 20px; color: var(--gold-hi); }
+
 /* ---------------- dice overlay ---------------- */
 .dice-overlay {
   position: fixed; inset: 0; z-index: 20;

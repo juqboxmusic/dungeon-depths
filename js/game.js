@@ -99,6 +99,21 @@ export class Game {
     this.currentRoom = -1; // force a room render on the first snapshot
   }
 
+  /** Guest: host committed to a room change — start building it right away
+   *  (same deterministic entry placement the host will compute). */
+  async remoteRoomChange(roomId, entryDir) {
+    if (this._applying || roomId === this.currentRoom) return;
+    this._applying = true;
+    this.ui.showRoomLoading(ROOMS[roomId].name);
+    try {
+      await this.renderRoom(roomId, entryDir);
+    } finally {
+      this.ui.hideRoomLoading();
+      this._applying = false;
+      if (this._pendingSnap) { const p = this._pendingSnap; this._pendingSnap = null; this.applySnapshot(p); }
+    }
+  }
+
   async applySnapshot(s) {
     if (this._applying) { this._pendingSnap = s; return; }
     this._applying = true;
@@ -112,7 +127,12 @@ export class Game {
       this.turnIndex = s.turnIndex;
       this.turn = s.turn;
       if (roomChanged) {
-        await this.renderRoom(s.currentRoom, s.entryDir || 'S', { keepPositions: true });
+        this.ui.showRoomLoading(ROOMS[s.currentRoom].name);
+        try {
+          await this.renderRoom(s.currentRoom, s.entryDir || 'S', { keepPositions: true });
+        } finally {
+          this.ui.hideRoomLoading();
+        }
       } else {
         for (const h of this.heroes) {
           this.engine.moveHero(h.id, h.stoneId);
@@ -121,6 +141,10 @@ export class Game {
         const rs = this.roomState;
         if (rs && rs.hp <= 0) this.engine.killMonster();
         if (this.quest?.status === 'collected') this.engine.removeQuestItem();
+        // door locks can change without a room change (combat start/clear)
+        for (const dir of Object.keys(this.roomDef.exits)) {
+          this.engine.setDoorState(dir, this.doorOpen(dir) ? 'open' : 'locked');
+        }
         this.ui.setRoomTitle(this.roomDef.name, this.cleared);
         this.ui.setMonsterBanner(this.inCombat ? this.monsterDefFor(this.currentRoom) : null, rs);
       }
@@ -291,7 +315,17 @@ export class Game {
   }
 
   async enterRoom(roomId, entryDir) {
-    const { room, monsterDef, rs } = await this.renderRoom(roomId, entryDir);
+    // tell guests NOW so they build the room in parallel with us,
+    // instead of waiting for our render + the state broadcast
+    if (this.mp?.active && this.mp.isHost) this.mp.broadcastEv({ ev: 'room', roomId, entryDir });
+    this.ui.showRoomLoading(ROOMS[roomId].name);
+    let result;
+    try {
+      result = await this.renderRoom(roomId, entryDir);
+    } finally {
+      this.ui.hideRoomLoading();
+    }
+    const { room, monsterDef, rs } = result;
 
     // relic pickup (host/solo logic)
     if (this.quest?.status === 'offered' && roomId === this.quest.itemRoom && !this.inCombat) {

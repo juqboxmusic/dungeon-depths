@@ -239,6 +239,7 @@ export class MP {
       case 'banner': this.ui.showTurnBanner(m.text, m.isMonster); break;
       case 'float': this.ui.floatText(m.text, m.kind, m.color); break;
       case 'punch': g?.engine.punchMonster(); break;
+      case 'room': g?.remoteRoomChange(m.roomId, m.entryDir); break;
       case 'fx':
         if (!g) break;
         if (m.kind === 'monsterCast') g.engine.monsterCastEffect(m.target, m.color);
