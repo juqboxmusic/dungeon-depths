@@ -471,9 +471,13 @@ export class Game {
           this.turn.rolledMove = true;
           this.turn.movePoints = r;
           this.log(`🎲 ${def.name} rolls <b>${r}</b> movement.`);
+          this.save(); // sync move points to guests → their stone highlights
           break;
         }
-        case 'attack': await this.heroAttack(action.move); break;
+        case 'attack':
+          if (this.turn.attacked) break; // stale remote press — one attack per turn
+          await this.heroAttack(action.move);
+          break;
         case 'magic': {
           const cfg = this.cfgFor(h.id);
           const spells = [...cfg.moves.filter((m) => m.kind === 'spell'), ...this.partySpells()];
@@ -645,6 +649,7 @@ export class Game {
     } else {
       this.log(`🛡 ${name} misses (${total} vs AC ${mAC}).`);
     }
+    this.save(); // sync attacked-flag to guests even on a miss
   }
 
   async castSpell(move, opts = {}) {
