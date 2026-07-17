@@ -121,8 +121,7 @@ export class MP {
     me.config = campaign.heroConfig[me.heroId];
     me.ready = true;
     this.phase = 'lobby';
-    this._syncLobby();
-    this._preload(this._preloadManifest()); // host warms its caches too
+    this._syncLobby(); // (assets already preloading since boot — see preload.js)
   }
 
   startGame() {
@@ -202,6 +201,7 @@ export class MP {
       case 'fx':
         if (!g) break;
         if (m.kind === 'monsterCast') g.engine.monsterCastEffect(m.target, m.color);
+        else if (m.kind === 'summonStrike') g.engine.summonStrike();
         else g.engine.castEffect(m.heroId, m.color, m.kind);
         break;
       case 'end': this.ui.showEnd(m.won, m.text); break;

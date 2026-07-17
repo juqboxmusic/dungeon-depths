@@ -8,7 +8,7 @@
 import {
   THEMES, ROOM_THEMES, HEROES, MONSTERS, BOSSES,
   MOVE_COLORS, ATTACK_STYLES, SPELL_EFFECTS, DIFFICULTIES,
-  ATTACK_CAP, SPELL_CAP, RULE_FIELDS, rulesFor, rulesDesc, defaultRulesFor,
+  ATTACK_CAP, SPELL_CAP, SUMMON_CAP, RULE_FIELDS, rulesFor, rulesDesc, defaultRulesFor,
   defaultHeroConfig, defaultMonsterConfig, mainAttackColor, newMoveId,
 } from './data.js';
 import { Preview3D } from './preview3d.js';
@@ -447,6 +447,7 @@ export class Designer {
         <div class="moves-add">
           <button id="btn-add-attack" class="btn btn-ghost btn-tiny" ${countKind(cfg, 'attack') >= ATTACK_CAP ? 'disabled' : ''}>+ Attack</button>
           ${opts.allowSpells ? `<button id="btn-add-spell" class="btn btn-ghost btn-tiny" ${countKind(cfg, 'spell') >= SPELL_CAP ? 'disabled' : ''}>+ Spell</button>` : ''}
+          ${opts.allowSpells ? `<button id="btn-add-summon" class="btn btn-ghost btn-tiny" ${countKind(cfg, 'summon') >= SUMMON_CAP ? 'disabled' : ''}>+ Summon</button>` : ''}
         </div>
         <p class="hint">The glowing ring under the ${opts.isMonster ? 'monster' : 'hero'} takes the colour of its first attack.</p>
       </div>`;
@@ -515,7 +516,7 @@ export class Designer {
       this.renderStagePanel();
       syncAccent(); // live ring recolor
     }));
-    panel.querySelectorAll('.opt-pill:not(.theme-pill)').forEach((p) => p.addEventListener('click', () => {
+    panel.querySelectorAll('.opt-pill:not(.theme-pill):not(.summon-pick)').forEach((p) => p.addEventListener('click', () => {
       const mv = cfg.moves.find((m) => m.id === p.dataset.move);
       if (!mv) return;
       if (mv.kind === 'attack') mv.style = p.dataset.opt;
@@ -535,6 +536,45 @@ export class Designer {
       cfg.moves.push({ id: newMoveId(), kind: 'spell', name: 'New Spell', color: pick(MOVE_COLORS), effect: 'blast' });
       this.renderStagePanel();
     });
+    $('btn-add-summon')?.addEventListener('click', () => {
+      const mv = { id: newMoveId(), kind: 'summon', name: 'Summon Ally', color: pick(MOVE_COLORS), monsterId: MONSTERS[0].id };
+      cfg.moves.push(mv);
+      this.renderStagePanel();
+      this.openSummonPicker(mv); // straight into "choose your monster"
+    });
+    panel.querySelectorAll('.summon-pick').forEach((b) => b.addEventListener('click', () => {
+      this.openSummonPicker(cfg.moves.find((m) => m.id === b.dataset.move));
+    }));
+  }
+
+  // ---------------------------------------------------------- summon monster picker
+  /** Full monster gallery with its own 3D turntable, for picking a summon. */
+  openSummonPicker(move) {
+    if (!move) return;
+    if (!this.summonPreview) {
+      this.summonPreview = new Preview3D($('summon-canvas'));
+    }
+    const strip = $('summon-roster');
+    const showMon = (id) => {
+      const def = MONSTERS.find((m) => m.id === id);
+      this.summonPreview.show(def, true, move.color);
+      $('summon-name-tag').innerHTML = `<span style="color:${def.color}">${def.icon}</span> ${def.name}`;
+      strip.querySelectorAll('.roster-card').forEach((c) => c.classList.toggle('focused', c.dataset.id === id));
+      move.monsterId = id;
+    };
+    strip.innerHTML = MONSTERS.map((d) => `
+      <button class="roster-card ${move.monsterId === d.id ? 'focused' : ''}" data-id="${d.id}">
+        <span class="roster-icon" style="color:${d.color}">${d.icon}</span>
+        <span class="roster-name">${d.name}</span>
+      </button>`).join('');
+    strip.querySelectorAll('.roster-card').forEach((c) => c.addEventListener('click', () => showMon(c.dataset.id)));
+    $('summon-picker-overlay').hidden = false;
+    this.summonPreview.resize();
+    showMon(move.monsterId || MONSTERS[0].id);
+    $('btn-summon-done').onclick = () => {
+      $('summon-picker-overlay').hidden = true;
+      this.renderStagePanel(); // refresh the move row's monster chip
+    };
   }
 
   /** Read-only monster/boss sheet for waiting guests. */
@@ -569,7 +609,7 @@ export class Designer {
   // ---------------------------------------------------------- advanced move editor
   openMoveEditor(move) {
     move.rules = rulesFor(move); // materialize defaults so steppers have values
-    const fields = RULE_FIELDS[move.kind === 'attack' ? 'attack' : move.effect] || [];
+    const fields = RULE_FIELDS[move.kind === 'attack' ? 'attack' : move.kind === 'summon' ? 'summon' : move.effect] || [];
     $('move-editor-title').innerHTML =
       `<i class="me-dot" style="background:${move.color}"></i> ${escapeHtml(move.name)}`;
     const body = $('move-editor-body');
@@ -666,17 +706,24 @@ function statRow(key, label, val, min, max) {
 function moveRow(m) {
   const opts = m.kind === 'attack' ? ATTACK_STYLES : SPELL_EFFECTS;
   const current = m.kind === 'attack' ? m.style : m.effect;
+  const mon = m.kind === 'summon' ? MONSTERS.find((x) => x.id === m.monsterId) : null;
   return `<div class="move-row">
     <div class="move-top">
-      <span class="move-kind ${m.kind}">${m.kind === 'attack' ? '⚔' : '✦'}</span>
+      <span class="move-kind ${m.kind}">${m.kind === 'attack' ? '⚔' : m.kind === 'summon' ? '🐉' : '✦'}</span>
       <input class="move-name" data-move="${m.id}" maxlength="24" value="${escapeHtml(m.name)}" />
       <button class="move-edit btn btn-ghost btn-tiny" data-move="${m.id}" title="Edit rules &amp; damage">⚙ Edit</button>
       <button class="move-del" data-move="${m.id}" title="Remove">✕</button>
     </div>
+    ${m.kind === 'summon' ? `
+    <div class="move-opts">
+      <button class="opt-pill on summon-pick" data-move="${m.id}" title="Pick which monster answers the call">
+        ${mon ? `<i style="color:${mon.color}">${mon.icon}</i> ${mon.name}` : 'Choose monster'} · change ▾
+      </button>
+    </div>` : `
     <div class="move-opts">
       ${Object.entries(opts).map(([k, o]) =>
         `<button class="opt-pill ${current === k ? 'on' : ''}" data-move="${m.id}" data-opt="${k}" title="${o.desc}">${o.name}</button>`).join('')}
-    </div>
+    </div>`}
     <div class="move-swatches">
       ${MOVE_COLORS.map((c) =>
         `<button class="swatch ${m.color === c ? 'on' : ''}" data-move="${m.id}" data-color="${c}" style="background:${c}"></button>`).join('')}

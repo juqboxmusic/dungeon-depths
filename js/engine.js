@@ -58,6 +58,7 @@ export class Engine {
     this._spin = null;           // active hold-and-spin session on a hero
     this.sideToken = null;       // quest side-character in this room
     this.questItemToken = null;  // floating relic in this room
+    this.summonToken = null;     // hero-summoned ally in this room
     this.onSideTap = null;       // set by game
 
     canvas.addEventListener('pointerdown', (e) => this._tap(e));
@@ -102,6 +103,19 @@ export class Engine {
       }
       if (this.sideToken) {
         this.sideToken.position.y = (Math.sin(t * 1.7) + 1) * 0.04;
+      }
+      if (this.summonToken) {
+        this.summonToken.position.y = (Math.sin(t * 1.9) + 1) * 0.045;
+        const home = this.summonToken.userData.home;
+        let lunge = 0;
+        if (this._summonStrikeT0 != null) {
+          const p = (t - this._summonStrikeT0) / 0.5;
+          if (p >= 1) this._summonStrikeT0 = null;
+          else lunge = Math.sin(p * Math.PI) * 1.3; // dart at the monster and back
+        }
+        const len = Math.hypot(home.x, home.z) || 1;
+        this.summonToken.position.x = home.x - (home.x / len) * lunge;
+        this.summonToken.position.z = home.z - (home.z / len) * lunge;
       }
       if (this.questItemToken) {
         this.questItemToken.rotation.y += dt * 1.2;
@@ -157,6 +171,7 @@ export class Engine {
 
     this.sideToken = null;
     this.questItemToken = null;
+    this.summonToken = null;
 
     const spec = opts.roomTheme || theme;
     const g = new THREE.Group();
@@ -444,6 +459,40 @@ export class Engine {
     this.sideToken.position.set(4.7, 0, -4.7);
     this.sideToken.rotation.set(0, Math.atan2(-4.7, 4.7), 0); // face the centre
     g.add(this.sideToken);
+  }
+
+  /** A monster called to fight FOR the party — stands off the stone ring,
+   *  glaring at the room's monster. */
+  async spawnSummon(def, accent) {
+    this.removeSummon();
+    const g = this.roomGroup;
+    const built = await buildToken(def, 1.7, true, accent || def.color);
+    if (g !== this.roomGroup) return; // room changed while the model loaded
+    this.removeSummon(); // a second call may have landed while awaiting
+    this.summonToken = built.group;
+    if (built.animations.length && built.animTarget) {
+      const mixer = new THREE.AnimationMixer(built.animTarget);
+      mixer.clipAction(built.animations[0]).play();
+      this.mixers.push(mixer);
+    }
+    const pos = { x: -3.6, z: 2.8 }; // flanking the platform, clear of the stones
+    built.group.position.set(pos.x, 0, pos.z);
+    built.group.rotation.set(0, Math.atan2(-pos.x, -pos.z), 0); // face the monster
+    built.group.userData.home = pos;
+    g.add(built.group);
+  }
+
+  removeSummon() {
+    if (this.summonToken) {
+      this.summonToken.parent?.remove(this.summonToken);
+      this.summonToken = null;
+    }
+  }
+
+  /** Quick lunge toward the platform when the summon lands its blow. */
+  summonStrike() {
+    if (this.summonToken) this._summonStrikeT0 = this.clock.elapsedTime;
+    this.punchMonster();
   }
 
   /** The floating relic the party must claim. */

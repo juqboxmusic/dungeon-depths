@@ -152,11 +152,13 @@ export const SPELL_EFFECTS = {
 
 export const ATTACK_CAP = 2;
 export const SPELL_CAP = 3;
+export const SUMMON_CAP = 1;
 
 // ---- MOVE RULES (advanced editor) ---------------------------
 // Every attack/spell carries editable rules; missing fields fall back to these.
 export function defaultRulesFor(move) {
   if (move.kind === 'attack') return { dmgDice: 1, dmgMod: 0, hitMod: 0, critOn: 20 };
+  if (move.kind === 'summon') return { threshold: 11, turns: 3, cooldown: 6 };
   switch (move.effect) {
     case 'heal': return { healDice: 2 };
     case 'ward': return { acBonus: 4 };
@@ -174,6 +176,10 @@ export function rulesDesc(move) {
   if (move.effect === 'teleport') return 'Open a waygate to any room you choose (except the Final Sanctum).';
   const r = rulesFor(move);
   const crit = (r.critOn && r.critOn < 20) ? ` Crits on ${r.critOn}+ (double damage).` : '';
+  if (move.kind === 'summon') {
+    const m = MONSTERS.find((x) => x.id === move.monsterId);
+    return `Roll d20: ${r.threshold}+ summons ${m ? `the ${m.name}` : 'a monster'} to fight beside you for ${r.turns} round${r.turns === 1 ? '' : 's'}. Recharges in ${r.cooldown} turns, success or not.`;
+  }
   if (move.kind === 'attack') {
     const mods = [];
     if (r.hitMod) mods.push(`${r.hitMod > 0 ? '+' : ''}${r.hitMod} to hit`);
@@ -208,6 +214,11 @@ export const RULE_FIELDS = {
     { key: 'turns1', label: '↳ turns attacking itself', min: 1, max: 3 },
     { key: 'threshold2', label: '😵 Deep confuse on d20 ≥', min: 2, max: 20 },
     { key: 'turns2', label: '↳ turns attacking itself', min: 1, max: 5 },
+  ],
+  summon: [
+    { key: 'threshold', label: '🎲 Succeeds on d20 ≥', min: 2, max: 19 },
+    { key: 'turns', label: '🐉 Fights for (rounds)', min: 1, max: 6 },
+    { key: 'cooldown', label: '⏳ Recharge (turns)', min: 4, max: 12 },
   ],
 };
 

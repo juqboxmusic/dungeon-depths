@@ -37,6 +37,7 @@ export class Game {
   float(text, kind, color) { this.ui.floatText(text, kind, color); if (this.mp?.active) this.mp.broadcastEv({ ev: 'float', text, kind, color }); }
   fxCast(heroId, color, kind) { if (this.mp?.active) this.mp.broadcastEv({ ev: 'fx', heroId, color, kind }); return this.engine.castEffect(heroId, color, kind); }
   fxMonster(targetId, color) { if (this.mp?.active) this.mp.broadcastEv({ ev: 'fx', kind: 'monsterCast', target: targetId, color }); return this.engine.monsterCastEffect(targetId, color); }
+  fxSummonStrike() { if (this.mp?.active) this.mp.broadcastEv({ ev: 'fx', kind: 'summonStrike' }); this.engine.summonStrike(); }
   async rollAnim(sides, caption) {
     const result = roll(sides);
     if (this.mp?.active) this.mp.broadcastEv({ ev: 'dice', sides, caption, result });
@@ -60,6 +61,7 @@ export class Game {
       cleared: this.cleared,
       lives: Number.isFinite(this.lives) ? this.lives : null,
       quest: this.quest || null,
+      summon: this.summon || null,
       turnIndex: this.turnIndex, turn: this.turn || null,
     };
   }
@@ -119,9 +121,11 @@ export class Game {
     this._applying = true;
     try {
       const roomChanged = s.currentRoom !== this.currentRoom;
+      const prevSummon = this.summon;
       this.heroes = s.heroes;
       this.rooms = s.rooms;
       this.cleared = s.cleared;
+      this.summon = s.summon || null;
       this.lives = this.difficulty.lives === Infinity ? Infinity : (s.lives ?? this.difficulty.lives);
       this.quest = s.quest || null;
       this.turnIndex = s.turnIndex;
@@ -141,6 +145,13 @@ export class Game {
         const rs = this.roomState;
         if (rs && rs.hp <= 0) this.engine.killMonster();
         if (this.quest?.status === 'collected') this.engine.removeQuestItem();
+        // mirror the host's summoned ally
+        if (this.summon && this.summon.moveId !== prevSummon?.moveId) {
+          const sDef = MONSTERS.find((m) => m.id === this.summon.monsterId);
+          if (sDef) this.engine.spawnSummon(sDef, this.summon.color);
+        } else if (!this.summon && prevSummon) {
+          this.engine.removeSummon();
+        }
         // door locks can change without a room change (combat start/clear)
         for (const dir of Object.keys(this.roomDef.exits)) {
           this.engine.setDoorState(dir, this.doorOpen(dir) ? 'open' : 'locked');
@@ -315,6 +326,7 @@ export class Game {
   }
 
   async enterRoom(roomId, entryDir) {
+    this.summon = null; // a summoned ally never follows through doors
     // tell guests NOW so they build the room in parallel with us,
     // instead of waiting for our render + the state broadcast
     if (this.mp?.active && this.mp.isHost) this.mp.broadcastEv({ ev: 'room', roomId, entryDir });
@@ -394,6 +406,14 @@ export class Game {
           disabled: this.turn.attacked || !onRing,
           primary: onRing && !this.turn.attacked,
           hint: onRing ? null : 'step onto the inner ring',
+        });
+      }
+      for (const mv of cfg.moves.filter((m) => m.kind === 'summon')) {
+        const cd = h.spellsUsed[mv.id] || 0;
+        actions.push({
+          id: 'summon', move: mv, label: `🐉 ${mv.name}`, color: mv.color,
+          disabled: cd > 0 || !!this.summon,
+          hint: cd > 0 ? `recharging — ${cd} turn${cd === 1 ? '' : 's'}` : this.summon ? 'ally already fighting' : null,
         });
       }
     }
@@ -478,6 +498,9 @@ export class Game {
           if (this.turn.attacked) break; // stale remote press — one attack per turn
           await this.heroAttack(action.move);
           break;
+        case 'summon':
+          await this.castSummon(action.move);
+          break;
         case 'magic': {
           const cfg = this.cfgFor(h.id);
           const spells = [...cfg.moves.filter((m) => m.kind === 'spell'), ...this.partySpells()];
@@ -547,6 +570,17 @@ export class Game {
           if (!mv || h.spellsUsed[mv.id] > 0) break;
           this.busy = true;
           this.castSpell(mv, { target: msg.target }).finally(() => {
+            this.busy = false;
+            if (this.turn) this.refreshActions();
+          });
+          break;
+        }
+        case 'summon': {
+          if (this.busy) break;
+          const mv = this.cfgFor(h.id).moves.find((m) => m.id === msg.moveId && m.kind === 'summon');
+          if (!mv || h.spellsUsed[mv.id] > 0 || this.summon) break;
+          this.busy = true;
+          this.castSummon(mv).finally(() => {
             this.busy = false;
             if (this.turn) this.refreshActions();
           });
@@ -723,6 +757,54 @@ export class Game {
     this.save();
   }
 
+  /** Summon move: d20 ritual that calls a monster to fight for the party. */
+  async castSummon(mv) {
+    const h = this.activeHero;
+    const def = this.heroDef(h);
+    if (h.spellsUsed[mv.id] > 0 || this.summon || !this.inCombat) return;
+    const rules = rulesFor(mv);
+    const mDef = MONSTERS.find((m) => m.id === mv.monsterId) || MONSTERS[0];
+    h.spellsUsed[mv.id] = rules.cooldown; // the rite exhausts you, success or not
+    this.log(`🐉 ${def.name} performs <b>${mv.name}</b> — calling on ${mDef.name}...`);
+    const r = await this.rollAnim(20, `${def.name} — ${mv.name}!`);
+    if (r === 1) { await this.triggerTwist(h); this.save(); return; }
+    if (r >= rules.threshold) {
+      this.summon = { moveId: mv.id, monsterId: mDef.id, heroId: h.id, turnsLeft: rules.turns, color: mv.color };
+      await this.engine.spawnSummon(mDef, mv.color);
+      await this.fxCast(h.id, mv.color, 'ward');
+      this.log(`🐉 <b>${mDef.name} answers the call!</b> It fights beside the party for <b>${rules.turns}</b> round${rules.turns === 1 ? '' : 's'}.`);
+      this.banner(`${mDef.icon} ${mDef.name} is summoned!`);
+    } else {
+      this.log(`💨 The summoning fizzles (rolled ${r}, needed ${rules.threshold}).`);
+      this.float('Fizzle!', 'miss', mv.color);
+    }
+    this.save();
+  }
+
+  /** The summoned ally strikes at the start of the monster's turn. */
+  async summonStrike() {
+    if (!this.summon || !this.inCombat) return;
+    const rs = this.roomState;
+    const mDef = this.monsterDefFor(this.currentRoom);
+    const sDef = MONSTERS.find((m) => m.id === this.summon.monsterId);
+    if (!sDef) { this.summon = null; return; }
+    const { dmgLo, dmgHi } = defaultMonsterConfig(sDef).stats;
+    const dmg = Math.max(1, dmgLo + Math.floor(Math.random() * (Math.max(dmgHi, dmgLo) - dmgLo + 1)));
+    this.fxSummonStrike();
+    await delay(450);
+    rs.hp = Math.max(0, rs.hp - dmg);
+    this.float(`-${dmg}`, 'dmg', this.summon.color);
+    this.summon.turnsLeft--;
+    this.log(`🐉 ${sDef.name} savages ${mDef.name} for <b>${dmg}</b>!${this.summon.turnsLeft > 0 ? '' : ' Its task done, it fades away.'}`);
+    this.ui.setMonsterBanner(mDef, rs);
+    if (this.summon.turnsLeft <= 0) {
+      this.summon = null;
+      this.engine.removeSummon();
+    }
+    this.save();
+    if (rs.hp <= 0) await this.roomCleared();
+  }
+
   async damageMonster(dmg, color) {
     const rs = this.roomState;
     const mDef = this.monsterDefFor(this.currentRoom);
@@ -741,6 +823,13 @@ export class Game {
     if (!this.inCombat) return;
     this.banner(`${mDef.icon} ${mDef.name}'s turn`, true);
     await delay(700);
+
+    // a summoned ally gets its blow in first — it may even finish the fight
+    if (this.summon) {
+      await this.summonStrike();
+      if (!this.inCombat) return; // the summon slew the monster
+      await delay(400);
+    }
 
     const mCfg = this.cfgForMonster(rs.monsterId);
 
@@ -864,6 +953,10 @@ export class Game {
     rs.cleared = true;
     this.engine.killMonster();
     this.ui.setMonsterBanner(null, null);
+    if (this.summon) { // the ally's work is done
+      this.summon = null;
+      this.engine.removeSummon();
+    }
 
     if (rs.isBoss) { this.victory(); return; }
 

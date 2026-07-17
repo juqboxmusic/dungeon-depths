@@ -101,6 +101,19 @@
       <button id="btn-wiz-next" class="btn btn-primary">Next ›</button>
     </footer>
 
+    <!-- Summon monster picker -->
+    <div id="summon-picker-overlay" class="modal-overlay" hidden>
+      <div class="modal summon-picker-modal">
+        <h3>🐉 Choose Your Summon</h3>
+        <div class="summon-preview">
+          <canvas id="summon-canvas"></canvas>
+          <div id="summon-name-tag" class="stage-name-tag"></div>
+        </div>
+        <div id="summon-roster" class="roster-strip"></div>
+        <button id="btn-summon-done" class="btn btn-primary btn-wide">✓ Summon This One</button>
+      </div>
+    </div>
+
     <!-- Advanced move editor -->
     <div id="move-editor-overlay" class="modal-overlay" hidden>
       <div class="modal move-editor-modal">
