@@ -70,22 +70,30 @@ export class Designer {
     this.render();
   }
 
-  /** Guest flow: pick + customize exactly one hero, then Ready. */
-  openHeroPick(lockedIds, onReady) {
+  /** Guest flow: pick + customize exactly one hero, then Ready.
+   *  After readying up they can keep flipping forward to browse the
+   *  monsters and bosses (read-only) while the host finishes designing. */
+  openHeroPick(lockedIds, onReady, onExit) {
     this.onComplete = null;
     this.heroCap = 1;
-    this.pickMode = { onReady };
+    this.pickMode = { onReady, onExit };
     this.lockedHeroIds = lockedIds || [];
     this.step = 2; // the heroes stage
-    this.state = this.state?.heroConfig ? this.state : null;
+    // returning to change hero? keep their customizations
+    const prev = this.state;
+    const keptHero = prev?.heroIds?.find?.((id) => !this.lockedHeroIds.includes(id));
     this.state = {
       name: '-', difficulty: 'medium', themeId: THEMES[0].id,
-      heroIds: [], heroConfig: {}, monsterIds: [], bossId: null, monsterConfig: {},
-      focusHero: HEROES.find((h) => !this.lockedHeroIds.includes(h.id))?.id || HEROES[0].id,
+      heroIds: keptHero ? [keptHero] : [], heroConfig: prev?.heroConfig || {},
+      monsterIds: [], bossId: null, monsterConfig: {},
+      focusHero: keptHero || HEROES.find((h) => !this.lockedHeroIds.includes(h.id))?.id || HEROES[0].id,
       focusMonster: MONSTERS[0].id, focusBoss: BOSSES[0].id,
     };
     this.render();
   }
+
+  /** Guest past the hero step — read-only bestiary pages. */
+  get browsing() { return !!this.pickMode && STEPS[this.step]?.id !== 'heroes'; }
 
   /** Live "hero taken" updates while a pick screen is open. */
   updateLocks(lockedIds) {
@@ -109,6 +117,7 @@ export class Designer {
   // ---------------------------------------------------------- validation
   stepError() {
     const s = this.state;
+    if (this.browsing) return null; // read-only pages are always "valid"
     switch (STEPS[this.step].id) {
       case 'name': return s.name.trim() ? null : 'Give your campaign a name.';
       case 'theme': return s.themeId ? null : 'Choose a realm.';
@@ -124,9 +133,14 @@ export class Designer {
   // ---------------------------------------------------------- render shell
   render() {
     const step = STEPS[this.step];
-    $('wizard-step-title').textContent = this.pickMode ? 'Choose Your Hero' : step.title;
+    const PICK_HEADS = {
+      heroes: ['Choose Your Hero', 'Pick one hero and make them yours — stats, attacks, spells.'],
+      monsters: ['Meet the Monsters', 'A look at what may lurk below — the host picks the final five.'],
+      boss: ['The Final Bosses', 'One of these will seal the last door.'],
+    };
+    $('wizard-step-title').textContent = this.pickMode ? PICK_HEADS[step.id][0] : step.title;
     $('wizard-step-flavor').textContent = this.pickMode
-      ? 'Pick one hero and make them yours — stats, attacks, spells.'
+      ? PICK_HEADS[step.id][1]
       : (this.heroCap === 1 && step.id === 'heroes' ? 'Pick YOUR hero — the rest of the party joins in the lobby.' : step.flavor);
     $('wizard-dots').innerHTML = this.pickMode ? '' : STEPS.map((s, i) =>
       `<span class="wiz-dot ${i === this.step ? 'now' : ''} ${i < this.step ? 'done' : ''}"></span>`).join('');
@@ -154,7 +168,7 @@ export class Designer {
           stateKey: 'monsterIds', focusKey: 'focusMonster',
           cfgFor: (id) => this.cfgForMonster(id),
           defaults: (def) => defaultMonsterConfig(def),
-          statFields: MONSTER_STATS, allowSpells: false,
+          statFields: MONSTER_STATS, allowSpells: false, browse: this.browsing,
           addLabel: '+ Add to Lineup', pickedLabel: (n) => `Lineup ${n}/5`,
         });
         break;
@@ -164,7 +178,7 @@ export class Designer {
           stateKey: 'bossId', focusKey: 'focusBoss',
           cfgFor: (id) => this.cfgForMonster(id),
           defaults: (def) => defaultMonsterConfig(def),
-          statFields: MONSTER_STATS, allowSpells: false,
+          statFields: MONSTER_STATS, allowSpells: false, browse: this.browsing,
           addLabel: '👑 Crown as Boss', pickedLabel: () => 'Final Boss',
         });
         break;
@@ -176,20 +190,35 @@ export class Designer {
   renderFooter() {
     const err = this.stepError();
     const last = this.step === STEPS.length - 1;
-    $('wizard-validation').textContent = err || (last ? '' : '✓');
-    $('wizard-validation').classList.toggle('ok', !err);
-    $('btn-wiz-back').style.visibility = (this.step === 0 || this.pickMode) ? 'hidden' : 'visible';
+    $('wizard-validation').textContent = this.browsing ? '👁 just looking' : (err || (last ? '' : '✓'));
+    $('wizard-validation').classList.toggle('ok', !err && !this.browsing);
+    $('btn-wiz-back').style.visibility = (this.step === 0 || (this.pickMode && !this.browsing)) ? 'hidden' : 'visible';
     const next = $('btn-wiz-next');
-    next.textContent = this.pickMode ? '✓ Ready' : (last ? '⚑ Begin the Descent' : 'Next ›');
-    next.classList.toggle('btn-begin', last || !!this.pickMode);
+    if (this.pickMode) {
+      const id = STEPS[this.step].id;
+      next.textContent = id === 'heroes' ? '✓ Ready ›' : id === 'monsters' ? 'The Bosses ›' : '↩ Back to Lobby';
+      next.classList.toggle('btn-begin', id === 'heroes');
+    } else {
+      next.textContent = last ? '⚑ Begin the Descent' : 'Next ›';
+      next.classList.toggle('btn-begin', last);
+    }
     next.disabled = !!err;
   }
 
   next() {
     if (this.pickMode) {
-      if (this.stepError()) return;
-      const heroId = this.state.heroIds[0];
-      this.pickMode.onReady({ heroId, config: this.cfgForHero(heroId) });
+      const id = STEPS[this.step].id;
+      if (id === 'heroes') {
+        if (this.stepError()) return;
+        const heroId = this.state.heroIds[0];
+        // ready up, then pass the wait browsing the bestiary
+        this.pickMode.onReady({ heroId, config: this.cfgForHero(heroId) });
+        this.go(1);
+      } else if (id === 'monsters') {
+        this.go(1);
+      } else {
+        this.pickMode.onExit?.();
+      }
       return;
     }
     if (this.step === STEPS.length - 1) this.finish();
@@ -199,6 +228,7 @@ export class Designer {
   go(delta) {
     const n = this.step + delta;
     if (n < 0 || n >= STEPS.length) return;
+    if (this.pickMode && (n < 2 || n > 4)) return; // guests: heroes ↔ monsters ↔ boss only
     if (delta > 0 && this.stepError()) return;
     this.step = n;
     this.render();
@@ -318,7 +348,10 @@ export class Designer {
     const s = this.state;
     const chosen = this.chosenIds(opts);
 
-    // picked chips
+    // picked chips (browse mode: guests just window-shop the bestiary)
+    if (opts.browse) {
+      $('picked-row').innerHTML = `<span class="picked-empty">👁 Bestiary preview — the host picks the lineup and may tweak it before the descent.</span>`;
+    } else
     $('picked-row').innerHTML =
       `<span class="picked-label">${opts.pickedLabel(chosen.length)}:</span>` +
       (chosen.length
@@ -347,7 +380,7 @@ export class Designer {
       const id = c.dataset.id;
       const wasFocused = s[opts.focusKey] === id;
       s[opts.focusKey] = id;
-      if (wasFocused) this.setChosen(id, !chosen.includes(id)); // 2nd tap toggles
+      if (wasFocused && !opts.browse) this.setChosen(id, !chosen.includes(id)); // 2nd tap toggles
       this.refreshStage();
       this.renderFooter();
       this.showFocused();
@@ -375,6 +408,7 @@ export class Designer {
     const cfg = opts.cfgFor(def.id);
     const chosen = this.chosenIds(opts).includes(def.id);
     const panel = $('stage-panel');
+    if (opts.browse) return this.renderBrowsePanel(panel, def, cfg, opts);
 
     panel.innerHTML = `
       <div class="edit-head">
@@ -501,6 +535,35 @@ export class Designer {
       cfg.moves.push({ id: newMoveId(), kind: 'spell', name: 'New Spell', color: pick(MOVE_COLORS), effect: 'blast' });
       this.renderStagePanel();
     });
+  }
+
+  /** Read-only monster/boss sheet for waiting guests. */
+  renderBrowsePanel(panel, def, cfg, opts) {
+    const theme = ROOM_THEMES[cfg.roomTheme || def.roomTheme];
+    panel.innerHTML = `
+      <div class="edit-head"><span class="edit-name" style="color:${def.color}">${def.icon} ${def.name}</span></div>
+      ${def.desc ? `<p class="edit-flavor">${def.desc}</p>` : ''}
+      ${theme ? `<p class="browse-lair">Lair: <b style="color:${theme.accent}">${theme.icon} ${theme.name}</b></p>` : ''}
+      <div class="stat-editor">
+        <div class="stat-row-head"><span>Stats</span></div>
+        ${opts.statFields.map((f) => `
+          <div class="stat-row">
+            <span class="stat-label">${f.label}</span>
+            <span class="stat-val">${cfg.stats[f.key]}</span>
+          </div>`).join('')}
+      </div>
+      <div class="moves-editor">
+        <div class="stat-row-head"><span>Attacks</span></div>
+        ${cfg.moves.map((m) => `
+          <div class="move-row">
+            <div class="move-top">
+              <span class="move-kind ${m.kind}">${m.kind === 'attack' ? '⚔' : '✦'}</span>
+              <span class="move-name-read"><i style="background:${m.color}"></i>${escapeHtml(m.name)}</span>
+            </div>
+            <p class="move-desc">${m.kind === 'attack' && ATTACK_STYLES[m.style] ? ATTACK_STYLES[m.style].desc + ' ' : ''}${rulesDesc(m)}</p>
+          </div>`).join('')}
+      </div>
+      <p class="hint">👁 Know thy enemy — study up while the host finishes the campaign.</p>`;
   }
 
   // ---------------------------------------------------------- advanced move editor

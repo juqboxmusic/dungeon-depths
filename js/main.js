@@ -51,8 +51,21 @@ function refreshHome() {
 const designer = new Designer();
 window.designer = designer; // handy for debugging
 
+/** Show the room code in the designer header while online, so the host
+ *  can invite friends the moment they start designing. */
+function setWizardCode() {
+  const el = $('wizard-room-code');
+  if (mp.active && mp.net.code) {
+    el.hidden = false;
+    el.innerHTML = `<small>room code · friends can join now</small><b>${mp.net.code}</b>`;
+  } else {
+    el.hidden = true;
+  }
+}
+
 $('btn-new-campaign').addEventListener('click', () => {
   ui.showScreen('screen-designer');
+  setWizardCode();
   designer.open(async (campaign) => {
     ensureEngine();
     ui.showScreen('screen-game');
@@ -116,6 +129,7 @@ $('btn-mp-go').addEventListener('click', async () => {
       await mp.hostRoom(name);
       $('mp-setup-overlay').hidden = true;
       ui.showScreen('screen-designer');
+      setWizardCode();
       designer.open((campaign) => {
         mp.hostDesignDone(campaign);
         ui.showScreen('screen-lobby');
@@ -135,11 +149,14 @@ $('btn-mp-go').addEventListener('click', async () => {
 
 $('btn-lobby-pick').addEventListener('click', () => {
   ui.showScreen('screen-designer');
-  designer.openHeroPick(mp.takenHeroIds(), (pick) => {
-    mp.sendPick(pick.heroId, pick.config);
-    ui.showScreen('screen-lobby');
-    mp.renderLobby();
-  });
+  setWizardCode();
+  designer.openHeroPick(
+    mp.takenHeroIds(),
+    // ready: send the pick, then stay in the designer to browse the bestiary
+    (pick) => mp.sendPick(pick.heroId, pick.config),
+    // done browsing
+    () => { ui.showScreen('screen-lobby'); mp.renderLobby(); },
+  );
 });
 $('btn-lobby-start').addEventListener('click', () => mp.startGame());
 $('btn-lobby-leave').addEventListener('click', () => {

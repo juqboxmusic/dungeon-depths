@@ -270,7 +270,7 @@ export class MP {
     if (!el) return;
     $('lobby-code').textContent = this.net.code || '·····';
     $('lobby-status').textContent =
-      this.phase === 'designing' ? (this.isHost ? 'Design your campaign, then return here.' : 'The host is designing the campaign…')
+      this.phase === 'designing' ? (this.isHost ? 'Design your campaign, then return here.' : 'The host is designing the campaign — pick your hero and browse the bestiary while you wait.')
       : this.phase === 'playing' ? 'The adventure is underway!'
       : 'Waiting for heroes to ready up…';
 
