@@ -7,6 +7,7 @@ import { Game } from './game.js';
 import { Designer } from './designer.js';
 import { MP } from './mp.js';
 import { HEROES, MONSTERS, BOSSES } from './data.js';
+import { preloadAll, onPreloadProgress, preloadState } from './preload.js';
 
 const $ = (id) => document.getElementById(id);
 const SAVE_KEY = 'dungeon-depths-save-v1';
@@ -176,6 +177,23 @@ $('btn-wiz-back').addEventListener('click', () => designer.go(-1));
 $('btn-wiz-next').addEventListener('click', () => designer.next());
 
 refreshHome();
+
+// ---- boot "Loading data" veil ----
+// Everything downloads up front (solo AND online): slow once on a new
+// device, then near-instant since the service worker keeps it all cached.
+{
+  const veil = $('boot-loading');
+  const dismiss = () => { veil.classList.add('gone'); setTimeout(() => { veil.hidden = true; }, 500); };
+  onPreloadProgress((s) => {
+    const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
+    $('boot-bar-fill').style.width = `${pct}%`;
+    $('boot-pct').textContent = s.total ? `${pct}% · ${s.done}/${s.total}` : 'taking stock…';
+  });
+  preloadAll().finally(dismiss);
+  // safety hatch for very slow connections — the download keeps going behind the game
+  setTimeout(() => { if (!preloadState.finished) $('boot-skip').hidden = false; }, 12000);
+  $('boot-skip').addEventListener('click', dismiss);
+}
 
 // ---- PWA ----
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {

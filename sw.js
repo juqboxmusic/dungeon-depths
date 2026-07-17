@@ -17,6 +17,7 @@ const APP_SHELL = [
   './js/tokens.js',
   './js/net.js',
   './js/mp.js',
+  './js/preload.js',
   'https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js',
   'https://unpkg.com/three@0.160.0/examples/jsm/utils/SkeletonUtils.js',
   './icons/icon-192.png',

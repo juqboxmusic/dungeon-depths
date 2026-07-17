@@ -5,8 +5,8 @@
 //  send intents when it is their hero's turn.
 // ============================================================
 import { Net } from './net.js';
-import { HEROES, MONSTERS, BOSSES, ROOM_THEMES } from './data.js';
-import { loadGLTF, loadImage, propFilesFor, floorTextureFilesFor, sideCharacterFiles } from './tokens.js';
+import { HEROES } from './data.js';
+import { preloadState, onPreloadProgress } from './preload.js';
 import { animateRoll } from './dice.js';
 
 const $ = (id) => document.getElementById(id);
@@ -23,6 +23,7 @@ export class MP {
     this.designer = null;
     this.onStart = null; // (campaign, isHost) => void
     this.pendingCampaign = null;
+    onPreloadProgress(() => this._setPreloadUI()); // boot preload → lobby bar
   }
 
   get isHost() { return this.net.isHost; }
@@ -42,7 +43,6 @@ export class MP {
     this.players = [{ connId: 'host', name, heroId: null, config: null, ready: false, connected: true }];
     this.net.onMessage = (msg, from) => this._hostMsg(msg, from);
     this.net.onPeerLeave = (id) => this._peerLeft(id);
-    this.preloadEverything(); // warm up while designing
     return code;
   }
 
@@ -98,97 +98,17 @@ export class MP {
       t: 'lobby',
       players: this.players.map(({ name, heroId, ready, connected }) => ({ name, heroId, ready, connected })),
       phase: this.phase,
-      preload: this._preloadManifest(),
     });
     this.renderLobby();
   }
 
-  /** Everything a client will need to render this campaign. */
-  _preloadManifest() {
-    const c = this.pendingCampaign;
-    if (!c) return null;
-    const models = new Set();
-    for (const p of this.players) {
-      const h = p.heroId && HEROES.find((x) => x.id === p.heroId);
-      if (h) models.add(h.model);
-    }
-    const themes = new Set([c.themeId]);
-    for (const id of c.monsterIds || []) {
-      const m = MONSTERS.find((x) => x.id === id);
-      if (m) { models.add(m.model); themes.add(c.monsterConfig?.[id]?.roomTheme || m.roomTheme); }
-    }
-    const b = BOSSES.find((x) => x.id === c.bossId);
-    if (b) { models.add(b.model); themes.add(c.monsterConfig?.[b.id]?.roomTheme || b.roomTheme); }
-    return { models: [...models].filter(Boolean), themes: [...themes].filter(Boolean) };
-  }
-
-  /** Warm the model/texture caches during the lobby wait, so the game
-   *  starts instantly instead of downloading mid-fight. */
-  async _preload(manifest) {
-    if (!manifest) return;
-    this._preloaded = this._preloaded || new Set();
-    const jobs = [];
-    for (const m of manifest.models || []) {
-      if (this._preloaded.has(m)) continue;
-      this._preloaded.add(m);
-      jobs.push(() => loadGLTF(m).catch(() => {}));
-    }
-    if (!this._preloaded.has('side-chars')) {
-      this._preloaded.add('side-chars');
-      jobs.push(async () => {
-        const files = await sideCharacterFiles().catch(() => []);
-        for (const f of files) await loadGLTF(`models/side-characters/${f}`).catch(() => {});
-      });
-    }
-    for (const t of manifest.themes || []) {
-      const key = 'theme:' + t;
-      if (this._preloaded.has(key)) continue;
-      this._preloaded.add(key);
-      jobs.push(async () => {
-        const props = await propFilesFor(t).catch(() => []);
-        for (const f of props) await loadGLTF(`models/props/${t}/${f}`).catch(() => {});
-        const texs = await floorTextureFilesFor(t).catch(() => []);
-        for (const f of texs) await loadImage(`floor-textures/${t}/${f}`).catch(() => {});
-      });
-    }
-    for (const j of jobs) await j(); // sequential — don't choke the connection
-  }
-
-  /** Download every model & texture the game could need, the moment a
-   *  player connects — they're waiting for the host to design anyway, so
-   *  the wait happens in the lobby instead of mid-game. Heroes first (they
-   *  pick one next), then the bestiary, then room dressing. */
-  async preloadEverything() {
-    if (this._plStarted) return;
-    this._plStarted = true;
-    const files = [];
-    for (const h of HEROES) files.push({ glb: true, path: h.model });
-    for (const m of MONSTERS) files.push({ glb: true, path: m.model });
-    for (const b of BOSSES) files.push({ glb: true, path: b.model });
-    const side = await sideCharacterFiles().catch(() => []);
-    for (const f of side) files.push({ glb: true, path: `models/side-characters/${f}` });
-    for (const t of Object.keys(ROOM_THEMES)) {
-      const props = await propFilesFor(t).catch(() => []);
-      for (const f of props) files.push({ glb: true, path: `models/props/${t}/${f}` });
-      const texs = await floorTextureFilesFor(t).catch(() => []);
-      for (const f of texs) files.push({ glb: false, path: `floor-textures/${t}/${f}` });
-    }
-    this._plTotal = files.length;
-    this._plDone = 0;
-    this._setPreloadUI();
-    for (const f of files) { // sequential — don't choke the connection
-      await (f.glb ? loadGLTF(f.path) : loadImage(f.path)).catch(() => {});
-      this._plDone++;
-      this._setPreloadUI();
-    }
-  }
-
+  /** Lobby echo of the boot-time preload (see preload.js). */
   _setPreloadUI() {
     const el = $('lobby-preload');
-    if (!el || !this._plTotal) return;
+    if (!el || !preloadState.total) return;
     el.hidden = false;
-    const pct = Math.round((this._plDone / this._plTotal) * 100);
-    el.innerHTML = this._plDone >= this._plTotal
+    const pct = Math.round((preloadState.done / preloadState.total) * 100);
+    el.innerHTML = preloadState.finished
       ? '✓ Everything is loaded — the descent will start instantly'
       : `<span class="lp-track"><i style="width:${pct}%"></i></span> Conjuring the dungeon… ${pct}%`;
   }
@@ -246,7 +166,6 @@ export class MP {
       $('screen-home').classList.add('active');
     };
     this.net.send({ t: 'hello', name });
-    this.preloadEverything(); // download it all during the lobby wait
   }
 
   _guestMsg(msg) {
@@ -257,7 +176,6 @@ export class MP {
         if (this.phase !== 'playing') this.phase = msg.phase;
         this.designer?.updateLocks?.(this.takenHeroIds());
         this.renderLobby();
-        if (msg.preload) this._preload(msg.preload); // download models while we wait
         break;
       case 'pickRejected':
         this.ui.showEvent({ icon: '🔒', title: 'Hero taken', text: 'Another player claimed that hero first — choose a different one.' });
