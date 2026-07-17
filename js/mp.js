@@ -5,7 +5,7 @@
 //  send intents when it is their hero's turn.
 // ============================================================
 import { Net } from './net.js';
-import { HEROES, MONSTERS, BOSSES } from './data.js';
+import { HEROES, MONSTERS, BOSSES, ROOM_THEMES } from './data.js';
 import { loadGLTF, loadImage, propFilesFor, floorTextureFilesFor, sideCharacterFiles } from './tokens.js';
 import { animateRoll } from './dice.js';
 
@@ -42,6 +42,7 @@ export class MP {
     this.players = [{ connId: 'host', name, heroId: null, config: null, ready: false, connected: true }];
     this.net.onMessage = (msg, from) => this._hostMsg(msg, from);
     this.net.onPeerLeave = (id) => this._peerLeft(id);
+    this.preloadEverything(); // warm up while designing
     return code;
   }
 
@@ -153,6 +154,45 @@ export class MP {
     for (const j of jobs) await j(); // sequential — don't choke the connection
   }
 
+  /** Download every model & texture the game could need, the moment a
+   *  player connects — they're waiting for the host to design anyway, so
+   *  the wait happens in the lobby instead of mid-game. Heroes first (they
+   *  pick one next), then the bestiary, then room dressing. */
+  async preloadEverything() {
+    if (this._plStarted) return;
+    this._plStarted = true;
+    const files = [];
+    for (const h of HEROES) files.push({ glb: true, path: h.model });
+    for (const m of MONSTERS) files.push({ glb: true, path: m.model });
+    for (const b of BOSSES) files.push({ glb: true, path: b.model });
+    const side = await sideCharacterFiles().catch(() => []);
+    for (const f of side) files.push({ glb: true, path: `models/side-characters/${f}` });
+    for (const t of Object.keys(ROOM_THEMES)) {
+      const props = await propFilesFor(t).catch(() => []);
+      for (const f of props) files.push({ glb: true, path: `models/props/${t}/${f}` });
+      const texs = await floorTextureFilesFor(t).catch(() => []);
+      for (const f of texs) files.push({ glb: false, path: `floor-textures/${t}/${f}` });
+    }
+    this._plTotal = files.length;
+    this._plDone = 0;
+    this._setPreloadUI();
+    for (const f of files) { // sequential — don't choke the connection
+      await (f.glb ? loadGLTF(f.path) : loadImage(f.path)).catch(() => {});
+      this._plDone++;
+      this._setPreloadUI();
+    }
+  }
+
+  _setPreloadUI() {
+    const el = $('lobby-preload');
+    if (!el || !this._plTotal) return;
+    el.hidden = false;
+    const pct = Math.round((this._plDone / this._plTotal) * 100);
+    el.innerHTML = this._plDone >= this._plTotal
+      ? '✓ Everything is loaded — the descent will start instantly'
+      : `<span class="lp-track"><i style="width:${pct}%"></i></span> Conjuring the dungeon… ${pct}%`;
+  }
+
   /** Host finished the designer (their own hero is in the campaign). */
   hostDesignDone(campaign) {
     this.pendingCampaign = campaign;
@@ -206,6 +246,7 @@ export class MP {
       $('screen-home').classList.add('active');
     };
     this.net.send({ t: 'hello', name });
+    this.preloadEverything(); // download it all during the lobby wait
   }
 
   _guestMsg(msg) {
@@ -282,6 +323,8 @@ export class MP {
         <span class="lp-ready">${p.connected === false ? '⚠ offline' : p.ready ? '✓ ready' : '…'}</span>
       </div>`;
     }).join('');
+
+    this._setPreloadUI();
 
     const me = this.me();
     $('btn-lobby-pick').hidden = this.isHost || this.phase === 'playing';
