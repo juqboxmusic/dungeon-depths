@@ -6,6 +6,7 @@ import { buildToken, buildProp, propFilesFor, floorTextureFilesFor, loadImage } 
 
 const RING_COUNT = 12;
 const RING_R = 5.6;    // ring of stepping stones
+const MORPH_HEIGHT = 3.6; // a summoned form is monster-sized (same as room monsters)
 const PATH_R = 7.7;    // walkway stone toward each door
 const DOOR_R = 9.4;    // door threshold stone
 const FLOOR_SIZE = 22;
@@ -58,7 +59,7 @@ export class Engine {
     this._spin = null;           // active hold-and-spin session on a hero
     this.sideToken = null;       // quest side-character in this room
     this.questItemToken = null;  // floating relic in this room
-    this.summonToken = null;     // hero-summoned ally in this room
+    this._morph = null;          // { heroId, original } while a hero is transformed
     this.onSideTap = null;       // set by game
 
     canvas.addEventListener('pointerdown', (e) => this._tap(e));
@@ -104,18 +105,27 @@ export class Engine {
       if (this.sideToken) {
         this.sideToken.position.y = (Math.sin(t * 1.7) + 1) * 0.04;
       }
-      if (this.summonToken) {
-        this.summonToken.position.y = (Math.sin(t * 1.9) + 1) * 0.045;
-        const home = this.summonToken.userData.home;
-        let lunge = 0;
-        if (this._summonStrikeT0 != null) {
-          const p = (t - this._summonStrikeT0) / 0.5;
-          if (p >= 1) this._summonStrikeT0 = null;
-          else lunge = Math.sin(p * Math.PI) * 1.3; // dart at the monster and back
+      if (this._morph) {
+        const m = this.heroTokens.get(this._morph.heroId);
+        if (m) {
+          // ease into the target size (grow-in on summon, shrink near allies)
+          const ts = m.userData.targetScale ?? 1;
+          if (Math.abs(m.scale.x - ts) > 0.002) m.scale.setScalar(m.scale.x + (ts - m.scale.x) * Math.min(1, dt * 5));
+          // strike: dart at the monster and back
+          if (this._summonStrikeT0 != null && this._strikeHome) {
+            const p = (t - this._summonStrikeT0) / 0.5;
+            const home = this._strikeHome;
+            if (p >= 1) {
+              this._summonStrikeT0 = null;
+              m.position.x = home.x; m.position.z = home.z;
+            } else {
+              const lunge = Math.sin(p * Math.PI) * 1.6;
+              const len = Math.hypot(home.x, home.z) || 1;
+              m.position.x = home.x - (home.x / len) * lunge;
+              m.position.z = home.z - (home.z / len) * lunge;
+            }
+          }
         }
-        const len = Math.hypot(home.x, home.z) || 1;
-        this.summonToken.position.x = home.x - (home.x / len) * lunge;
-        this.summonToken.position.z = home.z - (home.z / len) * lunge;
       }
       if (this.questItemToken) {
         this.questItemToken.rotation.y += dt * 1.2;
@@ -171,7 +181,8 @@ export class Engine {
 
     this.sideToken = null;
     this.questItemToken = null;
-    this.summonToken = null;
+    this._morph = null; // transformed heroes get fresh tokens with the room
+    this._summonStrikeT0 = null;
 
     const spec = opts.roomTheme || theme;
     const g = new THREE.Group();
@@ -426,6 +437,7 @@ export class Engine {
     if (!token || !s) return;
     token.position.set(s.x, 0.32, s.z);
     token.rotation.set(0, Math.atan2(-s.x, -s.z), 0);
+    this._fitMorph(); // a transformed hero may now (not) be crowding allies
   }
 
   removeHero(heroId) {
@@ -461,37 +473,70 @@ export class Engine {
     g.add(this.sideToken);
   }
 
-  /** A monster called to fight FOR the party — stands off the stone ring,
-   *  glaring at the room's monster. */
-  async spawnSummon(def, accent) {
-    this.removeSummon();
+  /** Summoning: the HERO transforms into the chosen monster. The token is
+   *  swapped in place on the hero's stone; the original is kept for revert. */
+  async morphHero(heroId, def, accent) {
+    this.unmorphHero();
     const g = this.roomGroup;
-    const built = await buildToken(def, 1.7, true, accent || def.color);
-    if (g !== this.roomGroup) return; // room changed while the model loaded
-    this.removeSummon(); // a second call may have landed while awaiting
-    this.summonToken = built.group;
+    const original = this.heroTokens.get(heroId);
+    if (!original) return;
+    const built = await buildToken(def, MORPH_HEIGHT, true, accent || def.color);
+    if (g !== this.roomGroup || this.heroTokens.get(heroId) !== original) return; // room changed mid-load
+    const morph = built.group;
     if (built.animations.length && built.animTarget) {
       const mixer = new THREE.AnimationMixer(built.animTarget);
       mixer.clipAction(built.animations[0]).play();
       this.mixers.push(mixer);
     }
-    const pos = { x: -3.6, z: 2.8 }; // flanking the platform, clear of the stones
-    built.group.position.set(pos.x, 0, pos.z);
-    built.group.rotation.set(0, Math.atan2(-pos.x, -pos.z), 0); // face the monster
-    built.group.userData.home = pos;
-    g.add(built.group);
+    morph.position.copy(original.position);
+    morph.rotation.y = original.rotation.y;
+    morph.userData.baseY = original.userData.baseY;
+    morph.userData.phase = original.userData.phase || 0;
+    this._morph = { heroId, original };
+    this.roomGroup.remove(original);
+    this.roomGroup.add(morph);
+    this.heroTokens.set(heroId, morph);
+    this._fitMorph();
+    morph.scale.setScalar(0.05); // grow into the new form
   }
 
-  removeSummon() {
-    if (this.summonToken) {
-      this.summonToken.parent?.remove(this.summonToken);
-      this.summonToken = null;
+  /** Revert the transformed hero to their own body (same stone, same pose). */
+  unmorphHero() {
+    if (!this._morph) return;
+    const { heroId, original } = this._morph;
+    const morph = this.heroTokens.get(heroId);
+    this._morph = null;
+    this._summonStrikeT0 = null;
+    if (!morph || !this.roomGroup) return; // room was rebuilt — tokens are fresh
+    original.position.copy(morph.position);
+    original.position.y = original.userData.baseY ?? 0.32;
+    original.rotation.y = morph.rotation.y;
+    original.rotation.z = morph.rotation.z; // keep a downed pose if it happened mid-summon
+    this.roomGroup.remove(morph);
+    this.roomGroup.add(original);
+    this.heroTokens.set(heroId, original);
+  }
+
+  /** Monster-sized by default; shrink toward hero bulk only when an ally
+   *  stands close enough to collide. */
+  _fitMorph() {
+    const m = this._morph && this.heroTokens.get(this._morph.heroId);
+    if (!m) return;
+    let crowded = false;
+    for (const [id, t] of this.heroTokens) {
+      if (id === this._morph.heroId) continue;
+      if (Math.hypot(t.position.x - m.position.x, t.position.z - m.position.z) < 3.0) { crowded = true; break; }
     }
+    m.userData.targetScale = crowded ? 2.4 / MORPH_HEIGHT : 1;
   }
 
-  /** Quick lunge toward the platform when the summon lands its blow. */
+  /** Quick lunge toward the platform when the transformed hero lands its blow. */
   summonStrike() {
-    if (this.summonToken) this._summonStrikeT0 = this.clock.elapsedTime;
+    const m = this._morph && this.heroTokens.get(this._morph.heroId);
+    if (m) {
+      this._summonStrikeT0 = this.clock.elapsedTime;
+      this._strikeHome = { x: m.position.x, z: m.position.z };
+    }
     this.punchMonster();
   }
 

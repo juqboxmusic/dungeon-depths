@@ -178,7 +178,7 @@ export function rulesDesc(move) {
   const crit = (r.critOn && r.critOn < 20) ? ` Crits on ${r.critOn}+ (double damage).` : '';
   if (move.kind === 'summon') {
     const m = MONSTERS.find((x) => x.id === move.monsterId);
-    return `Roll d20: ${r.threshold}+ summons ${m ? `the ${m.name}` : 'a monster'} to fight beside you for ${r.turns} round${r.turns === 1 ? '' : 's'}. Recharges in ${r.cooldown} turns, success or not.`;
+    return `Roll d20: ${r.threshold}+ transforms you into ${m ? `the ${m.name}` : 'a monster'} for ${r.turns} round${r.turns === 1 ? '' : 's'} — it strikes the enemy each monster turn. Recharges in ${r.cooldown} turns, success or not.`;
   }
   if (move.kind === 'attack') {
     const mods = [];

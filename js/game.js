@@ -145,12 +145,12 @@ export class Game {
         const rs = this.roomState;
         if (rs && rs.hp <= 0) this.engine.killMonster();
         if (this.quest?.status === 'collected') this.engine.removeQuestItem();
-        // mirror the host's summoned ally
+        // mirror the host's transformation
         if (this.summon && this.summon.moveId !== prevSummon?.moveId) {
           const sDef = MONSTERS.find((m) => m.id === this.summon.monsterId);
-          if (sDef) this.engine.spawnSummon(sDef, this.summon.color);
+          if (sDef) this.engine.morphHero(this.summon.heroId, sDef, this.summon.color);
         } else if (!this.summon && prevSummon) {
-          this.engine.removeSummon();
+          this.engine.unmorphHero();
         }
         // door locks can change without a room change (combat start/clear)
         for (const dir of Object.keys(this.roomDef.exits)) {
@@ -413,7 +413,7 @@ export class Game {
         actions.push({
           id: 'summon', move: mv, label: `🐉 ${mv.name}`, color: mv.color,
           disabled: cd > 0 || !!this.summon,
-          hint: cd > 0 ? `recharging — ${cd} turn${cd === 1 ? '' : 's'}` : this.summon ? 'ally already fighting' : null,
+          hint: cd > 0 ? `recharging — ${cd} turn${cd === 1 ? '' : 's'}` : this.summon ? 'a transformation is active' : null,
         });
       }
     }
@@ -770,10 +770,10 @@ export class Game {
     if (r === 1) { await this.triggerTwist(h); this.save(); return; }
     if (r >= rules.threshold) {
       this.summon = { moveId: mv.id, monsterId: mDef.id, heroId: h.id, turnsLeft: rules.turns, color: mv.color };
-      await this.engine.spawnSummon(mDef, mv.color);
       await this.fxCast(h.id, mv.color, 'ward');
-      this.log(`🐉 <b>${mDef.name} answers the call!</b> It fights beside the party for <b>${rules.turns}</b> round${rules.turns === 1 ? '' : 's'}.`);
-      this.banner(`${mDef.icon} ${mDef.name} is summoned!`);
+      await this.engine.morphHero(h.id, mDef, mv.color);
+      this.log(`🐉 <b>${def.name} transforms into ${mDef.name}!</b> The form holds for <b>${rules.turns}</b> round${rules.turns === 1 ? '' : 's'}.`);
+      this.banner(`${mDef.icon} ${def.name} becomes ${mDef.name}!`);
     } else {
       this.log(`💨 The summoning fizzles (rolled ${r}, needed ${rules.threshold}).`);
       this.float('Fizzle!', 'miss', mv.color);
@@ -781,13 +781,21 @@ export class Game {
     this.save();
   }
 
-  /** The summoned ally strikes at the start of the monster's turn. */
+  /** The transformed hero strikes at the start of the monster's turn. */
   async summonStrike() {
     if (!this.summon || !this.inCombat) return;
     const rs = this.roomState;
     const mDef = this.monsterDefFor(this.currentRoom);
     const sDef = MONSTERS.find((m) => m.id === this.summon.monsterId);
-    if (!sDef) { this.summon = null; return; }
+    const caster = this.heroes.find((x) => x.id === this.summon.heroId);
+    const casterName = caster ? this.heroDef(caster).name : 'The hero';
+    if (!sDef || !caster || caster.downed) { // a fallen caster can't hold the form
+      this.summon = null;
+      this.engine.unmorphHero();
+      if (caster?.downed) this.log(`💨 The summoning breaks — ${casterName} returns to their own form.`);
+      this.save();
+      return;
+    }
     const { dmgLo, dmgHi } = defaultMonsterConfig(sDef).stats;
     const dmg = Math.max(1, dmgLo + Math.floor(Math.random() * (Math.max(dmgHi, dmgLo) - dmgLo + 1)));
     this.fxSummonStrike();
@@ -795,11 +803,12 @@ export class Game {
     rs.hp = Math.max(0, rs.hp - dmg);
     this.float(`-${dmg}`, 'dmg', this.summon.color);
     this.summon.turnsLeft--;
-    this.log(`🐉 ${sDef.name} savages ${mDef.name} for <b>${dmg}</b>!${this.summon.turnsLeft > 0 ? '' : ' Its task done, it fades away.'}`);
+    this.log(`🐉 ${casterName} — as <b>${sDef.name}</b> — savages ${mDef.name} for <b>${dmg}</b>!`);
     this.ui.setMonsterBanner(mDef, rs);
     if (this.summon.turnsLeft <= 0) {
       this.summon = null;
-      this.engine.removeSummon();
+      this.engine.unmorphHero();
+      this.log(`✨ The form dissolves — ${casterName} is themself again.`);
     }
     this.save();
     if (rs.hp <= 0) await this.roomCleared();
@@ -953,9 +962,9 @@ export class Game {
     rs.cleared = true;
     this.engine.killMonster();
     this.ui.setMonsterBanner(null, null);
-    if (this.summon) { // the ally's work is done
+    if (this.summon) { // the fight is over — return to your own form
       this.summon = null;
-      this.engine.removeSummon();
+      this.engine.unmorphHero();
     }
 
     if (rs.isBoss) { this.victory(); return; }
