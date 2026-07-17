@@ -199,7 +199,7 @@ h1, h2, h3, .game-title, .monster-name, .turn-banner { font-family: Georgia, "Ti
 /* ---- stage layout: editor left, BIG 3D preview centre-right, roster below ---- */
 .wizard-body.stage-step { padding: 0; overflow: hidden; display: flex; }
 .wiz-stage {
-  flex: 1; min-height: 0; display: grid;
+  flex: 1; min-height: 0; min-width: 0; display: grid;
   grid-template:
     "left main" 1fr
     "left bottom" auto / minmax(280px, 340px) 1fr;
@@ -223,7 +223,7 @@ h1, h2, h3, .game-title, .monster-name, .turn-banner { font-family: Georgia, "Ti
   text-shadow: 0 2px 12px rgba(0,0,0,0.9); pointer-events: none; white-space: nowrap;
 }
 .wiz-bottom {
-  grid-area: bottom; padding: 6px 12px max(10px, env(safe-area-inset-bottom));
+  grid-area: bottom; min-width: 0; padding: 6px 12px max(10px, env(safe-area-inset-bottom));
   background: linear-gradient(0deg, rgba(11,10,13,0.95), rgba(11,10,13,0.6));
   border-top: 1px solid var(--line);
 }
